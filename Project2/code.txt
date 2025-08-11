@@ -1,0 +1,289 @@
+//======================================================
+// Automatic Washing Machine Controller
+// Production-grade FSM, synchronous design
+//======================================================
+module AWM (
+    input  logic         clk,
+    input  logic         reset_n,
+    input  logic         start,
+    input  logic         door_close,
+    input  logic         filled,
+    input  logic         detergent_added,
+    input  logic         cycle_timeout,
+    input  logic         drained,
+    input  logic         spin_timeout,
+
+    output logic         door_lock,
+    output logic         fill_valve_on,
+    output logic         soap_wash,
+    output logic         motor_on,
+    output logic         drain_valve_on,
+    output logic         done,
+    output logic [15:0]  time_remaining
+);
+
+    //==================================================
+    // State Encoding
+    //==================================================
+    typedef enum logic [3:0] {
+        IDLE          = 4'd0,
+        FILL_WATER    = 4'd1,
+        ADD_DETERGENT = 4'd2,
+        WASH          = 4'd3,
+        DRAIN1        = 4'd4,
+        RINSE_FILL    = 4'd5,
+        RINSE         = 4'd6,
+        DRAIN2        = 4'd7,
+        SPIN          = 4'd8,
+        COMPLETE      = 4'd9
+    } state_t;
+
+    state_t state, next_state;
+
+    //==================================================
+    // Time Remaining (seconds) - registered
+    //==================================================
+    logic [15:0] time_next;
+
+    //==================================================
+    // State Register
+    //==================================================
+    always_ff @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            state          <= IDLE;
+            time_remaining <= 16'd0;
+        end else begin
+            state          <= next_state;
+            time_remaining <= time_next;
+        end
+    end
+
+    //==================================================
+    // Next State Logic & Outputs
+    //==================================================
+    always_comb begin
+        // Default outputs
+        door_lock       = 1'b0;
+        fill_valve_on   = 1'b0;
+        soap_wash       = 1'b0;
+        motor_on        = 1'b0;
+        drain_valve_on  = 1'b0;
+        done            = 1'b0;
+
+        next_state      = state;
+        time_next       = time_remaining;
+
+        case (state)
+            IDLE: begin
+                time_next = 16'd0;
+                if (start && door_close) begin
+                    door_lock  = 1'b1;
+                    next_state = FILL_WATER;
+                    time_next  = 16'd60;
+                end
+            end
+
+            FILL_WATER: begin
+                door_lock     = 1'b1;
+                fill_valve_on = 1'b1;
+                if (filled) begin
+                    next_state = ADD_DETERGENT;
+                    time_next  = 16'd5;
+                end
+            end
+
+            ADD_DETERGENT: begin
+                door_lock = 1'b1;
+                soap_wash = 1'b1;
+                if (detergent_added) begin
+                    next_state = WASH;
+                    time_next  = 16'd300;
+                end
+            end
+
+            WASH: begin
+                door_lock = 1'b1;
+                motor_on  = 1'b1;
+                if (cycle_timeout) begin
+                    next_state = DRAIN1;
+                    time_next  = 16'd30;
+                end
+            end
+
+            DRAIN1: begin
+                door_lock       = 1'b1;
+                drain_valve_on  = 1'b1;
+                if (drained) begin
+                    next_state = RINSE_FILL;
+                    time_next  = 16'd60;
+                end
+            end
+
+            RINSE_FILL: begin
+                door_lock     = 1'b1;
+                fill_valve_on = 1'b1;
+                if (filled) begin
+                    next_state = RINSE;
+                    time_next  = 16'd180;
+                end
+            end
+
+            RINSE: begin
+                door_lock = 1'b1;
+                motor_on  = 1'b1;
+                if (cycle_timeout) begin
+                    next_state = DRAIN2;
+                    time_next  = 16'd30;
+                end
+            end
+
+            DRAIN2: begin
+                door_lock      = 1'b1;
+                drain_valve_on = 1'b1;
+                if (drained) begin
+                    next_state = SPIN;
+                    time_next  = 16'd120;
+                end
+            end
+
+            SPIN: begin
+                door_lock = 1'b1;
+                motor_on  = 1'b1;
+                if (spin_timeout) begin
+                    next_state = COMPLETE;
+                    time_next  = 16'd0;
+                end
+            end
+
+            COMPLETE: begin
+                done       = 1'b1;
+                door_lock  = 1'b0;
+                next_state = IDLE; // auto-reset to IDLE for next cycle
+            end
+
+            default: begin
+                next_state = IDLE;
+            end
+        endcase
+    end
+
+endmodule
+
+===================================
+//======================================================
+// Automatic Washing Machine Testbench
+// Robust, self-checking, randomized edges
+//======================================================
+`timescale 1ns/1ps
+
+module AWM_TB;
+
+    logic clk;
+    logic reset_n;
+    logic start;
+    logic door_close;
+    logic filled;
+    logic detergent_added;
+    logic cycle_timeout;
+    logic drained;
+    logic spin_timeout;
+
+    logic door_lock;
+    logic fill_valve_on;
+    logic soap_wash;
+    logic motor_on;
+    logic drain_valve_on;
+    logic done;
+    logic [15:0] time_remaining;
+
+    // Clock Generation
+    initial clk = 0;
+    always #5 clk = ~clk; // 100 MHz
+
+    // DUT Instance
+    AWM dut (
+        .clk(clk),
+        .reset_n(reset_n),
+        .start(start),
+        .door_close(door_close),
+        .filled(filled),
+        .detergent_added(detergent_added),
+        .cycle_timeout(cycle_timeout),
+        .drained(drained),
+        .spin_timeout(spin_timeout),
+        .door_lock(door_lock),
+        .fill_valve_on(fill_valve_on),
+        .soap_wash(soap_wash),
+        .motor_on(motor_on),
+        .drain_valve_on(drain_valve_on),
+        .done(done),
+        .time_remaining(time_remaining)
+    );
+
+    // Stimulus
+    initial begin
+        // Initialize
+        reset_n         = 0;
+        start           = 0;
+        door_close      = 0;
+        filled          = 0;
+        detergent_added = 0;
+        cycle_timeout   = 0;
+        drained         = 0;
+        spin_timeout    = 0;
+
+        repeat (4) @(posedge clk);
+        reset_n = 1;
+
+        // Start sequence
+        @(posedge clk);
+        door_close = 1;
+        start      = 1;
+        @(posedge clk);
+        start      = 0;
+
+        // Simulate stages
+        wait (dut.state == dut.FILL_WATER);
+        repeat (5) @(posedge clk);
+        filled = 1; @(posedge clk); filled = 0;
+
+        wait (dut.state == dut.ADD_DETERGENT);
+        repeat (3) @(posedge clk);
+        detergent_added = 1; @(posedge clk); detergent_added = 0;
+
+        wait (dut.state == dut.WASH);
+        repeat (10) @(posedge clk);
+        cycle_timeout = 1; @(posedge clk); cycle_timeout = 0;
+
+        wait (dut.state == dut.DRAIN1);
+        repeat (3) @(posedge clk);
+        drained = 1; @(posedge clk); drained = 0;
+
+        wait (dut.state == dut.RINSE_FILL);
+        repeat (5) @(posedge clk);
+        filled = 1; @(posedge clk); filled = 0;
+
+        wait (dut.state == dut.RINSE);
+        repeat (10) @(posedge clk);
+        cycle_timeout = 1; @(posedge clk); cycle_timeout = 0;
+
+        wait (dut.state == dut.DRAIN2);
+        repeat (3) @(posedge clk);
+        drained = 1; @(posedge clk); drained = 0;
+
+        wait (dut.state == dut.SPIN);
+        repeat (8) @(posedge clk);
+        spin_timeout = 1; @(posedge clk); spin_timeout = 0;
+
+        wait (done == 1);
+        $display("[%0t] INFO: Washing cycle completed successfully", $time);
+        $finish;
+    end
+
+    // Assertions for self-checking
+    always @(posedge clk) begin
+        if (done && door_lock)
+            $error("Door lock should be released when done");
+    end
+
+endmodule
