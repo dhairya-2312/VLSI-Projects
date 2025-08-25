@@ -1,0 +1,280 @@
+`timescale 1ns/1ps
+// 16-bit Multiplier Module
+module multiplier_16bit (
+    input [15:0] A,
+    input [15:0] B,
+    output [31:0] product
+);
+    assign product = A * B;
+endmodule
+
+// 16-bit Divider Module
+module divider_16bit (
+    input [15:0] dividend,
+    input [15:0] divisor,
+    output [15:0] quotient,
+    output [15:0] remainder,
+    output divide_by_zero
+);
+    assign divide_by_zero = (divisor == 16'h0000);
+    assign quotient = divide_by_zero ? 16'h0000 : dividend / divisor;
+    assign remainder = divide_by_zero ? 16'h0000 : dividend % divisor;
+endmodule
+
+// 16-bit ALU Design Module with Multiplier and Divider
+module ALU(
+    input [15:0] A,          // First operand
+    input [15:0] B,          // Second operand
+    input [3:0] opcode,      // Operation selection
+    output reg [15:0] result, // ALU result (lower 16 bits for multiply)
+    output reg [15:0] result_high, // Upper 16 bits for multiply result
+    output zero,             // Zero flag
+    output carry,            // Carry flag
+    output overflow,         // Overflow flag
+    output divide_by_zero    // Division by zero flag
+);
+
+    reg c_out;  // Carry out
+    reg v;      // Overflow detection
+    reg div_zero; // Division by zero flag
+    
+    // Instantiate multiplier and divider
+    wire [31:0] mult_product;
+    wire [15:0] div_quotient, div_remainder;
+    wire div_by_zero_flag;
+    
+    multiplier_16bit mult_inst (
+        .A(A),
+        .B(B),
+        .product(mult_product)
+    );
+    
+    divider_16bit div_inst (
+        .dividend(A),
+        .divisor(B),
+        .quotient(div_quotient),
+        .remainder(div_remainder),
+        .divide_by_zero(div_by_zero_flag)
+    );
+
+    always @(*) begin
+        c_out = 0;
+        v = 0;
+        div_zero = 0;
+        result_high = 16'h0000;
+        
+        case (opcode)
+            4'b0000: begin // Addition
+                {c_out, result} = A + B;
+            end
+            4'b0001: begin // Subtraction
+                {c_out, result} = A - B;
+            end
+            4'b0010: begin // AND
+                result = A & B;
+                c_out = 0;
+            end
+            4'b0011: begin // OR
+                result = A | B;
+                c_out = 0;
+            end
+            4'b0100: begin // XOR
+                result = A ^ B;
+                c_out = 0;
+            end
+            4'b0101: begin // NOT A
+                result = ~A;
+                c_out = 0;
+            end
+            4'b0110: begin // Shift Left A
+                {c_out, result} = {A, 1'b0};
+            end
+            4'b0111: begin // Shift Right A
+                result = A >> 1;
+                c_out = A[0];
+            end
+            4'b1000: begin // Multiplication
+                result = mult_product[15:0];      // Lower 16 bits
+                result_high = mult_product[31:16]; // Upper 16 bits
+                c_out = |mult_product[31:16];     // Carry if upper bits are non-zero
+            end
+            4'b1001: begin // Division (Quotient)
+                result = div_quotient;
+                div_zero = div_by_zero_flag;
+            end
+            4'b1010: begin // Division (Remainder)
+                result = div_remainder;
+                div_zero = div_by_zero_flag;
+            end
+            default: begin
+                result = 16'h0000;
+                result_high = 16'h0000;
+                c_out = 0;
+            end
+        endcase
+
+        // Overflow detection for signed operations
+        if (opcode == 4'b0000) // Addition
+            v = (A[15] == B[15]) && (result[15] != A[15]);
+        else if (opcode == 4'b0001) // Subtraction
+            v = (A[15] != B[15]) && (result[15] != A[15]);
+        else if (opcode == 4'b1000) // Multiplication overflow
+            v = |mult_product[31:16]; // Overflow if upper 16 bits are non-zero
+        else
+            v = 0;
+    end
+
+    assign zero = (result == 16'h0000);
+    assign carry = c_out;
+    assign overflow = v;
+    assign divide_by_zero = div_zero;
+
+endmodule
+
+`timescale 1ns/1ps
+module ALU_tb;
+
+    // Testbench signals
+    reg [15:0] A, B;
+    reg [3:0] opcode;
+    wire [15:0] result, result_high;
+    wire zero, carry, overflow, divide_by_zero;
+
+    // Instantiate the ALU
+    ALU uut (
+        .A(A),
+        .B(B),
+        .opcode(opcode),
+        .result(result),
+        .result_high(result_high),
+        .zero(zero),
+        .carry(carry),
+        .overflow(overflow),
+        .divide_by_zero(divide_by_zero)
+    );
+
+    initial begin
+        // Display header
+        $display("Time\tA\t\tB\t\tOpcode\tResult\t\tResult_H\tZ\tC\tV\tDiv0");
+        $display("----\t----\t\t----\t\t------\t------\t\t--------\t-\t-\t-\t----");
+        
+        // Test Addition
+        A = 16'h1234; B = 16'h5678; opcode = 4'b0000;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Subtraction
+        A = 16'h9999; B = 16'h1111; opcode = 4'b0001;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test AND
+        A = 16'hFFFF; B = 16'h0F0F; opcode = 4'b0010;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test OR
+        A = 16'h1111; B = 16'h2222; opcode = 4'b0011;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test XOR
+        A = 16'hAAAA; B = 16'h5555; opcode = 4'b0100;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test NOT A
+        A = 16'h0F0F; B = 16'h0000; opcode = 4'b0101;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Shift Left
+        A = 16'h1234; B = 16'h0000; opcode = 4'b0110;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Shift Right
+        A = 16'h1234; B = 16'h0000; opcode = 4'b0111;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Multiplication - Small numbers
+        A = 16'h0010; B = 16'h0020; opcode = 4'b1000;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Multiplication - Large numbers (overflow)
+        A = 16'hFFFF; B = 16'hFFFF; opcode = 4'b1000;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Multiplication - Zero case
+        A = 16'h1234; B = 16'h0000; opcode = 4'b1000;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Division - Normal case (quotient)
+        A = 16'h0064; B = 16'h000A; opcode = 4'b1001; // 100 / 10 = 10
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Division - Remainder case
+        A = 16'h0067; B = 16'h000A; opcode = 4'b1010; // 103 % 10 = 3
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Division by Zero - Quotient
+        A = 16'h1234; B = 16'h0000; opcode = 4'b1001;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Division by Zero - Remainder
+        A = 16'h5678; B = 16'h0000; opcode = 4'b1010;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Zero flag
+        A = 16'h0000; B = 16'h0000; opcode = 4'b0000;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Carry flag (Addition overflow)
+        A = 16'hFFFF; B = 16'h0001; opcode = 4'b0000;
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Overflow flag (Signed addition)
+        A = 16'h7FFF; B = 16'h0001; opcode = 4'b0000; // Max positive + 1
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        // Test Overflow flag (Signed subtraction)
+        A = 16'h8000; B = 16'h0001; opcode = 4'b0001; // Min negative - 1
+        #10 $display("%0t\t%h\t%h\t%b\t%h\t%h\t%b\t%b\t%b\t%b", 
+                     $time, A, B, opcode, result, result_high, zero, carry, overflow, divide_by_zero);
+
+        $display("\n=== Operation Summary ===");
+        $display("0000: Addition");
+        $display("0001: Subtraction"); 
+        $display("0010: AND");
+        $display("0011: OR");
+        $display("0100: XOR");
+        $display("0101: NOT A");
+        $display("0110: Shift Left A");
+        $display("0111: Shift Right A");
+        $display("1000: Multiplication (32-bit result)");
+        $display("1001: Division (Quotient)");
+        $display("1010: Division (Remainder)");
+        
+        $display("\nTestbench completed successfully!");
+        $finish;
+    end
+
+    // Generate VCD file for waveform viewing
+    initial begin
+        $dumpfile("alu_16bit.vcd");
+        $dumpvars(0, ALU_tb);
+    end
+
+endmodule
+
